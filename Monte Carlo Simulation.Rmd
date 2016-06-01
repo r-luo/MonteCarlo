@@ -4,27 +4,91 @@ runtime: shiny
 output: html_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=F}
 knitr::opts_chunk$set(echo = TRUE)
 library(shiny)
 library(ggplot2)
 library(reshape2)
 library(stockPortfolio)
+
+#Global Variables
+number_of_trading_days_per_year = 252
 ```
 
 #Stock Informtaion
 
-```{r stock_info, echo=FALSE}
-inputPanel(
-    textInput(inputId = "stock_init_price", label = "Stock Price at time t=0", value = "100", placeholder = "e.g. 100.00")
-  , textInput(inputId = "stock_return", label = "Stock Annual Return", value = "0.05", placeholder = "e.g. 0.05")
-  , textInput(inputId = "stock_volatility", label = "Stock Annual Volatility", value = "0.1", placeholder = "e.g. 0.10")
+```{r stock_info, echo=F}
+tabsetPanel(
+  position = "left", type = "pills",
+  
+  tabPanel("Manual Input", 
+    inputPanel(
+      textInput(inputId = "stock_init_price", label = "Stock Price at time t=0", value = "100", placeholder = "e.g. 100.00")
+      , textInput(inputId = "stock_return", label = "Stock Annual Return", value = "0.05", placeholder = "e.g. 0.05")
+      , textInput(inputId = "stock_volatility", label = "Stock Annual Volatility", value = "0.1", placeholder = "e.g. 0.10")
+    )
+  ), 
+  tabPanel("Historical Estimate", 
+    inputPanel(
+      textInput(inputId = "stock_ticker", label = "Ticker", value = "", placeholder = "e.g. AAPL")
+      , dateRangeInput(
+        inputId = "stock_date_range", label = "Start Date"
+        , start = paste(as.character(as.numeric(format(Sys.time(), "%Y"))-1), "-", format(Sys.time(), "%m-%d"), sep="")
+        , max = format(Sys.time(), "%Y-%m-%d")
+      )
+      , actionButton(inputId = "stock_get_data", label = "Get Stock Data")
+    )
+    , tableOutput(outputId = "stock_print_info")
+    , textOutput(outputId = "check_date_range")
+  )
 )
 ```
 
+```{r get_stock_data, echo=F}
+output$check_date_range <- renderText({
+  validate(
+    need(input$stock_date_range[2] > input$stock_date_range[1], "End date should not be earlier than start date")
+  )
+})
+
+stock_info <- eventReactive(input$stock_get_data, {
+  list("ticker" = input$stock_ticker
+       , "date_range" = format(input$stock_date_range, "%Y-%m-%d")
+  )
+})
+
+stock_data <- reactive({
+  getReturns(stock_info()$ticker, freq = "day", get = "all", start = stock_info()$date_range[1], end = stock_info()$date_range[2])
+})
+
+calc_return_vol <- function(prices){
+  N <- length(prices)
+  returns <- log(prices[1:(N-1)]/prices[2:N])
+  volatility <- sqrt(number_of_trading_days_per_year * var(returns))
+  mean_return <- mean(returns) * number_of_trading_days_per_year - volatility^2 / 2
+  return(data.frame("current_price" = prices[1],
+                    "return" = mean_return,
+                    "volatility" = volatility))
+}
+
+stock_return_vol <- reactive(do.call(calc_return_vol, list("prices"=stock_data()$full[[1]]$Adj.Close)))
+
+output$stock_print_info <- renderTable(
+  stock_return_vol()
+)
+
+observeEvent(input$stock_get_data, {
+  updateTextInput(session, inputId = "stock_init_price", value = stock_return_vol()$current_price)
+  updateTextInput(session, inputId = "stock_return", value = stock_return_vol()$return)
+  updateTextInput(session, inputId = "stock_volatility", value = stock_return_vol()$volatility)
+})
+
+```
+
+
 #Simulation Details
 
-```{r simulation_info, echo=FALSE}
+```{r simulation_info, echo=F}
 inputPanel(
   textInput(inputId = "sim_yr", label = "Number of Years to Simulate", value = "2", placeholder = "Positive integer or fraction, e.g. 2.5")
   , textInput(inputId = "sim_n_per_yr", label = "Number of Time Points per Year", value = "200", placeholder = "Integer, e.g. 200")
